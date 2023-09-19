@@ -41,6 +41,15 @@ pub enum OrderPacket {
         /// Using only deposited funds will allow the trader to pass in less accounts per instruction and
         /// save transaction space as well as compute. This is only for traders who have a seat
         use_only_deposited_funds: bool,
+
+        /// If this is set, the order will be invalid after the specified slot
+        last_valid_slot: Option<u64>,
+
+        /// If this is set, the order will be invalid after the specified unix timestamp
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
+
+        /// If this is set, the order will fail silently if there are insufficient funds
+        fail_silently_on_insufficient_funds: bool,
     },
 
     /// This order type is used to place a limit order on the book
@@ -68,6 +77,15 @@ pub enum OrderPacket {
         /// Using only deposited funds will allow the trader to pass in less accounts per instruction and
         /// save transaction space as well as compute. This is only for traders who have a seat
         use_only_deposited_funds: bool,
+
+        /// If this is set, the order will be invalid after the specified slot
+        last_valid_slot: Option<u64>,
+
+        /// If this is set, the order will be invalid after the specified unix timestamp
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
+
+        /// If this is set, the order will fail silently if there are insufficient funds
+        fail_silently_on_insufficient_funds: bool,
     },
 
     /// This order type is used to place an order that will be matched against existing resting orders
@@ -114,6 +132,12 @@ pub enum OrderPacket {
         /// Using only deposited funds will allow the trader to pass in less accounts per instruction and
         /// save transaction space as well as compute. This is only for traders who have a seat
         use_only_deposited_funds: bool,
+
+        /// If this is set, the order will be invalid after the specified slot
+        last_valid_slot: Option<u64>,
+
+        /// If this is set, the order will be invalid after the specified unix timestamp
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
     },
 }
 
@@ -169,6 +193,9 @@ impl OrderPacket {
             client_order_id: 0,
             reject_post_only: true,
             use_only_deposited_funds: false,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
         }
     }
 
@@ -185,6 +212,9 @@ impl OrderPacket {
             client_order_id,
             reject_post_only: true,
             use_only_deposited_funds: false,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
         }
     }
 
@@ -201,6 +231,9 @@ impl OrderPacket {
             client_order_id,
             reject_post_only: false,
             use_only_deposited_funds: false,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
         }
     }
 
@@ -219,6 +252,9 @@ impl OrderPacket {
             client_order_id,
             reject_post_only,
             use_only_deposited_funds,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
         }
     }
 
@@ -268,6 +304,9 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
         }
     }
 
@@ -290,6 +329,8 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            None,
+            None,
         )
     }
 
@@ -312,6 +353,8 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            None,
+            None,
         )
     }
 
@@ -334,6 +377,8 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            None,
+            None,
         )
     }
 
@@ -356,6 +401,8 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            None,
+            None,
         )
     }
 
@@ -379,6 +426,8 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            None,
+            None,
         )
     }
 
@@ -394,6 +443,8 @@ impl OrderPacket {
             None,
             0,
             false,
+            None,
+            None,
         )
     }
 
@@ -409,6 +460,8 @@ impl OrderPacket {
             None,
             0,
             false,
+            None,
+            None,
         )
     }
 
@@ -424,6 +477,8 @@ impl OrderPacket {
         match_limit: Option<u64>,
         client_order_id: u128,
         use_only_deposited_funds: bool,
+        last_valid_slot: Option<u64>,
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
     ) -> Self {
         Self::ImmediateOrCancel {
             side,
@@ -436,6 +491,8 @@ impl OrderPacket {
             match_limit,
             client_order_id,
             use_only_deposited_funds,
+            last_valid_slot,
+            last_valid_unix_timestamp_in_seconds,
         }
     }
 }
@@ -446,6 +503,20 @@ impl OrderPacket {
             Self::PostOnly { side, .. } => *side,
             Self::Limit { side, .. } => *side,
             Self::ImmediateOrCancel { side, .. } => *side,
+        }
+    }
+
+    pub fn fail_silently_on_insufficient_funds(&self) -> bool {
+        match self {
+            Self::PostOnly {
+                fail_silently_on_insufficient_funds,
+                ..
+            } => *fail_silently_on_insufficient_funds,
+            Self::Limit {
+                fail_silently_on_insufficient_funds,
+                ..
+            } => *fail_silently_on_insufficient_funds,
+            Self::ImmediateOrCancel { .. } => false,
         }
     }
 
@@ -547,5 +618,289 @@ impl OrderPacket {
                 ..
             } => *old_price_in_ticks = Some(price_in_ticks),
         }
+    }
+
+    pub fn get_last_valid_slot(&self) -> Option<u64> {
+        match self {
+            Self::PostOnly {
+                last_valid_slot, ..
+            } => *last_valid_slot,
+            Self::Limit {
+                last_valid_slot, ..
+            } => *last_valid_slot,
+            Self::ImmediateOrCancel {
+                last_valid_slot, ..
+            } => *last_valid_slot,
+        }
+    }
+
+    pub fn get_last_valid_unix_timestamp_in_seconds(&self) -> Option<u64> {
+        match self {
+            Self::PostOnly {
+                last_valid_unix_timestamp_in_seconds,
+                ..
+            } => *last_valid_unix_timestamp_in_seconds,
+            Self::Limit {
+                last_valid_unix_timestamp_in_seconds,
+                ..
+            } => *last_valid_unix_timestamp_in_seconds,
+            Self::ImmediateOrCancel {
+                last_valid_unix_timestamp_in_seconds,
+                ..
+            } => *last_valid_unix_timestamp_in_seconds,
+        }
+    }
+
+    pub fn is_expired(&self, current_slot: u64, current_unix_timestamp_in_seconds: u64) -> bool {
+        if let Some(last_valid_slot) = self.get_last_valid_slot() {
+            if current_slot > last_valid_slot {
+                return true;
+            }
+        }
+        if let Some(last_valid_unix_timestamp_in_seconds) =
+            self.get_last_valid_unix_timestamp_in_seconds()
+        {
+            if current_unix_timestamp_in_seconds > last_valid_unix_timestamp_in_seconds {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+pub fn decode_order_packet(bytes: &[u8]) -> Option<OrderPacket> {
+    // First, attempt to decode the order packet with the raw input data.
+    match OrderPacket::try_from_slice(bytes) {
+        Ok(order_packet) => Some(order_packet),
+        // If the initial deserialization fails, the strategy is to decode the order packet with the
+        // starting assumption that none of the optional fields are present.
+        //
+        // The original input data is padded with all of the optional fields at the end.
+        // Each field is then removed one at a time in order until the order packet successfully decodes.
+        // The requirement here is that the included optional fields must be contiguous in memory
+        // (i.e. it is undefined behavior to include non-adjacent optional fields while excluding the ones in between)
+        Err(_) => {
+            // The optional fields at the end of the order packet are not required in the raw input data.
+            let additional_fields = &[
+                0_u8, /* last_valid_slot */
+                0_u8, /* last_valid_unix_timestamp_in_seconds */
+                0_u8, /* fail_silently_on_insufficient_funds */
+            ];
+            let mut padded_bytes = [bytes, additional_fields].concat();
+            for _ in 0..additional_fields.len() {
+                if let Ok(order_packet) = OrderPacket::try_from_slice(&padded_bytes) {
+                    return Some(order_packet);
+                }
+                padded_bytes.pop();
+            }
+            None
+        }
+    }
+}
+
+#[test]
+fn test_decode_order_packet() {
+    use rand::Rng;
+    use rand::{rngs::StdRng, SeedableRng};
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let num_iters = 100;
+
+    #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq, Debug)]
+    pub enum DeprecatedOrderPacket {
+        PostOnly {
+            side: Side,
+            price_in_ticks: Ticks,
+            num_base_lots: BaseLots,
+            client_order_id: u128,
+            reject_post_only: bool,
+            use_only_deposited_funds: bool,
+        },
+        Limit {
+            side: Side,
+            price_in_ticks: Ticks,
+            num_base_lots: BaseLots,
+            self_trade_behavior: SelfTradeBehavior,
+            match_limit: Option<u64>,
+            client_order_id: u128,
+            use_only_deposited_funds: bool,
+        },
+
+        ImmediateOrCancel {
+            side: Side,
+            price_in_ticks: Option<Ticks>,
+            num_base_lots: BaseLots,
+            num_quote_lots: QuoteLots,
+            min_base_lots_to_fill: BaseLots,
+            min_quote_lots_to_fill: QuoteLots,
+            self_trade_behavior: SelfTradeBehavior,
+            match_limit: Option<u64>,
+            client_order_id: u128,
+            use_only_deposited_funds: bool,
+        },
+    }
+    for _ in 0..num_iters {
+        let side = if rng.gen::<f64>() > 0.5 {
+            Side::Bid
+        } else {
+            Side::Ask
+        };
+
+        let price_in_ticks = Ticks::new(rng.gen::<u64>());
+        let num_base_lots = BaseLots::new(rng.gen::<u64>());
+        let client_order_id = rng.gen::<u128>();
+        let reject_post_only = rng.gen::<bool>();
+        let use_only_deposited_funds = rng.gen::<bool>();
+        let packet = OrderPacket::PostOnly {
+            side,
+            price_in_ticks,
+            num_base_lots,
+            client_order_id,
+            reject_post_only,
+            use_only_deposited_funds,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
+        };
+        let deprecated_packet = DeprecatedOrderPacket::PostOnly {
+            side,
+            price_in_ticks,
+            num_base_lots,
+            client_order_id,
+            reject_post_only,
+            use_only_deposited_funds,
+        };
+        let bytes = packet.try_to_vec().unwrap();
+        let decoded_normal = decode_order_packet(&bytes).unwrap();
+        let decoded_inferred_1 = decode_order_packet(&bytes[..bytes.len() - 1]).unwrap();
+        let decoded_inferred_2 = decode_order_packet(&bytes[..bytes.len() - 3]).unwrap();
+        let deprecated_bytes = deprecated_packet.try_to_vec().unwrap();
+        let decoded_deprecated = decode_order_packet(&deprecated_bytes).unwrap();
+        assert_eq!(packet, decoded_normal);
+        assert_eq!(decoded_normal, decoded_inferred_1);
+        assert_eq!(decoded_inferred_1, decoded_deprecated);
+        assert_eq!(decoded_inferred_1, decoded_inferred_2);
+    }
+
+    for _ in 0..num_iters {
+        let side = if rng.gen::<f64>() > 0.5 {
+            Side::Bid
+        } else {
+            Side::Ask
+        };
+
+        let price_in_ticks = Ticks::new(rng.gen::<u64>());
+        let num_base_lots = BaseLots::new(rng.gen::<u64>());
+        let client_order_id = rng.gen::<u128>();
+        let self_trade_behavior = match rng.gen_range(0, 3) {
+            0 => SelfTradeBehavior::DecrementTake,
+            1 => SelfTradeBehavior::CancelProvide,
+            2 => SelfTradeBehavior::Abort,
+            _ => unreachable!(),
+        };
+        let match_limit = if rng.gen::<f64>() > 0.5 {
+            Some(rng.gen::<u64>())
+        } else {
+            None
+        };
+        let use_only_deposited_funds = rng.gen::<bool>();
+        let packet = OrderPacket::Limit {
+            side,
+            price_in_ticks,
+            num_base_lots,
+            client_order_id,
+            self_trade_behavior,
+            match_limit,
+            use_only_deposited_funds,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+            fail_silently_on_insufficient_funds: false,
+        };
+        let deprecated_packet = DeprecatedOrderPacket::Limit {
+            side,
+            price_in_ticks,
+            num_base_lots,
+            client_order_id,
+            self_trade_behavior,
+            match_limit,
+            use_only_deposited_funds,
+        };
+        let bytes = packet.try_to_vec().unwrap();
+        let decoded_normal = decode_order_packet(&bytes).unwrap();
+        let decoded_inferred_1 = decode_order_packet(&bytes[..bytes.len() - 1]).unwrap();
+        let decoded_inferred_2 = decode_order_packet(&bytes[..bytes.len() - 3]).unwrap();
+        let deprecated_bytes = deprecated_packet.try_to_vec().unwrap();
+        let decoded_deprecated = decode_order_packet(&deprecated_bytes).unwrap();
+        assert_eq!(packet, decoded_normal);
+        assert_eq!(decoded_normal, decoded_inferred_1);
+        assert_eq!(decoded_inferred_1, decoded_deprecated);
+        assert_eq!(decoded_inferred_1, decoded_inferred_2);
+    }
+
+    for _ in 0..num_iters {
+        let side = if rng.gen::<f64>() > 0.5 {
+            Side::Bid
+        } else {
+            Side::Ask
+        };
+
+        let price_in_ticks = if rng.gen::<f64>() > 0.5 {
+            Some(Ticks::new(rng.gen::<u64>()))
+        } else {
+            None
+        };
+        let num_base_lots = BaseLots::new(rng.gen::<u64>());
+        let min_base_lots_to_fill = BaseLots::new(rng.gen::<u64>());
+        let num_quote_lots = QuoteLots::new(rng.gen::<u64>());
+        let min_quote_lots_to_fill = QuoteLots::new(rng.gen::<u64>());
+        let client_order_id = rng.gen::<u128>();
+        let self_trade_behavior = match rng.gen_range(0, 3) {
+            0 => SelfTradeBehavior::DecrementTake,
+            1 => SelfTradeBehavior::CancelProvide,
+            2 => SelfTradeBehavior::Abort,
+            _ => unreachable!(),
+        };
+        let match_limit = if rng.gen::<f64>() > 0.5 {
+            Some(rng.gen::<u64>())
+        } else {
+            None
+        };
+        let use_only_deposited_funds = rng.gen::<bool>();
+        let packet = OrderPacket::ImmediateOrCancel {
+            side,
+            price_in_ticks,
+            num_base_lots,
+            num_quote_lots,
+            min_base_lots_to_fill,
+            min_quote_lots_to_fill,
+            client_order_id,
+            self_trade_behavior,
+            match_limit,
+            use_only_deposited_funds,
+            last_valid_slot: None,
+            last_valid_unix_timestamp_in_seconds: None,
+        };
+        let deprecated_packet = DeprecatedOrderPacket::ImmediateOrCancel {
+            side,
+            price_in_ticks,
+            num_base_lots,
+            num_quote_lots,
+            min_base_lots_to_fill,
+            min_quote_lots_to_fill,
+            client_order_id,
+            self_trade_behavior,
+            match_limit,
+            use_only_deposited_funds,
+        };
+        let bytes = packet.try_to_vec().unwrap();
+        let decoded_normal = decode_order_packet(&bytes).unwrap();
+        let decoded_inferred_1 = decode_order_packet(&bytes[..bytes.len() - 2]).unwrap();
+        let decoded_inferred_2 = decode_order_packet(&bytes[..bytes.len() - 1]).unwrap();
+        let deprecated_bytes = deprecated_packet.try_to_vec().unwrap();
+        let decoded_deprecated = decode_order_packet(&deprecated_bytes).unwrap();
+        assert_eq!(packet, decoded_normal);
+        assert_eq!(decoded_normal, decoded_inferred_1);
+        assert_eq!(decoded_inferred_1, decoded_deprecated);
+        assert_eq!(decoded_inferred_1, decoded_inferred_2);
     }
 }

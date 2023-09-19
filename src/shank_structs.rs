@@ -1,4 +1,4 @@
-///! These types are unused in the program, but are used by the IDL
+///! These types are unused in the program, but are used to generate the IDL.
 ///! The program uses explicit types for all quantities, but these unit types
 ///! will not be exposed to the client.
 ///!
@@ -40,6 +40,9 @@ enum OrderPacket {
         client_order_id: u128,
         reject_post_only: bool,
         use_only_deposited_funds: bool,
+        last_valid_slot: Option<u64>,
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
+        fail_silently_on_insufficient_funds: bool,
     },
     Limit {
         side: Side,
@@ -49,6 +52,9 @@ enum OrderPacket {
         match_limit: Option<u64>,
         client_order_id: u128,
         use_only_deposited_funds: bool,
+        last_valid_slot: Option<u64>,
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
+        fail_silently_on_insufficient_funds: bool,
     },
     ImmediateOrCancel {
         side: Side,
@@ -61,5 +67,7 @@ enum OrderPacket {
         match_limit: Option<u64>,
         client_order_id: u128,
         use_only_deposited_funds: bool,
+        last_valid_slot: Option<u64>,
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
     },
 }

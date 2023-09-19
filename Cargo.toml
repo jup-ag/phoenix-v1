@@ -1,6 +1,6 @@
 [package]
 name = "phoenix-v1"
-version = "0.1.4"
+version = "0.2.4"
 edition = "2021"
 resolver = "2"
 repository = "https://github.com/Ellipsis-Labs/phoenix-v1"
@@ -28,8 +28,8 @@ overflow-checks = true
 [dependencies]
 shank = "=0.0.12"
 spl-token = { version = "=3.5.0", features = ["no-entrypoint"] }
-spl-associated-token-account = { version = "1.1.2", features = [ "no-entrypoint" ] }
-solana-program = "1.14.9"
+spl-associated-token-account = { version = "=1.1.1", features = [ "no-entrypoint" ] } 
+solana-program = "=1.14.9"
 borsh = "=0.9.3"
 bytemuck = "=1.13.0"
 lib-sokoban = "=0.3.0" 
@@ -42,7 +42,7 @@ static_assertions = "=1.1.0"
 
 [dev-dependencies]
 rand = "0.7.3"
-ellipsis-client = "0.1.15"
+ellipsis-client = "0.2.1"
 tokio = { version = "1.8.4", features = ["full"] }
-solana-sdk = "1.14.9"
-phoenix-sdk = { git = "https://github.com/Ellipsis-Labs/phoenix-sdk", rev = "adb01a3" }
+solana-sdk = "=1.14.9"
+phoenix-sdk = "0.4.3"

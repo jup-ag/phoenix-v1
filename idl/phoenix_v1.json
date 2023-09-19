@@ -1,5 +1,5 @@
 {
-  "version": "0.1.4",
+  "version": "0.2.4",
   "name": "phoenix_v1",
   "instructions": [
     {
@@ -1801,6 +1801,58 @@
       }
     },
     {
+      "name": "TimeInForceEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "name": "orderSequenceNumber",
+            "type": "u64"
+          },
+          {
+            "name": "lastValidSlot",
+            "type": "u64"
+          },
+          {
+            "name": "lastValidUnixTimestampInSeconds",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ExpiredOrderEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "name": "makerId",
+            "type": "publicKey"
+          },
+          {
+            "name": "orderSequenceNumber",
+            "type": "u64"
+          },
+          {
+            "name": "priceInTicks",
+            "type": "u64"
+          },
+          {
+            "name": "baseLotsRemoved",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "CancelUpToParams",
       "type": {
         "kind": "struct",
@@ -1932,8 +1984,10 @@
             }
           },
           {
-            "name": "rejectPostOnly",
-            "type": "bool"
+            "name": "failedMultipleLimitOrderBehavior",
+            "type": {
+              "defined": "FailedMultipleLimitOrderBehavior"
+            }
           }
         ]
       }
@@ -1950,6 +2004,18 @@
           {
             "name": "sizeInBaseLots",
             "type": "u64"
+          },
+          {
+            "name": "lastValidSlot",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "lastValidUnixTimestampInSeconds",
+            "type": {
+              "option": "u64"
+            }
           }
         ]
       }
@@ -2094,6 +2160,24 @@
       }
     },
     {
+      "name": "FIFOOrderId",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "priceInTicks",
+            "type": {
+              "defined": "Ticks"
+            }
+          },
+          {
+            "name": "orderSequenceNumber",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "PhoenixMarketEvent",
       "type": {
         "kind": "enum",
@@ -2156,6 +2240,42 @@
                 "defined": "FeeEvent"
               }
             ]
+          },
+          {
+            "name": "TimeInForce",
+            "fields": [
+              {
+                "defined": "TimeInForceEvent"
+              }
+            ]
+          },
+          {
+            "name": "ExpiredOrder",
+            "fields": [
+              {
+                "defined": "ExpiredOrderEvent"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "FailedMultipleLimitOrderBehavior",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "FailOnInsufficientFundsAndAmendOnCross"
+          },
+          {
+            "name": "FailOnInsufficientFundsAndFailOnCross"
+          },
+          {
+            "name": "SkipOnInsufficientFundsAndAmendOnCross"
+          },
+          {
+            "name": "SkipOnInsufficientFundsAndFailOnCross"
           }
         ]
       }
@@ -2236,6 +2356,22 @@
               {
                 "name": "use_only_deposited_funds",
                 "type": "bool"
+              },
+              {
+                "name": "last_valid_slot",
+                "type": {
+                  "option": "u64"
+                }
+              },
+              {
+                "name": "last_valid_unix_timestamp_in_seconds",
+                "type": {
+                  "option": "u64"
+                }
+              },
+              {
+                "name": "fail_silently_on_insufficient_funds",
+                "type": "bool"
               }
             ]
           },
@@ -2274,6 +2410,22 @@
               },
               {
                 "name": "use_only_deposited_funds",
+                "type": "bool"
+              },
+              {
+                "name": "last_valid_slot",
+                "type": {
+                  "option": "u64"
+                }
+              },
+              {
+                "name": "last_valid_unix_timestamp_in_seconds",
+                "type": {
+                  "option": "u64"
+                }
+              },
+              {
+                "name": "fail_silently_on_insufficient_funds",
                 "type": "bool"
               }
             ]
@@ -2328,6 +2480,18 @@
               {
                 "name": "use_only_deposited_funds",
                 "type": "bool"
+              },
+              {
+                "name": "last_valid_slot",
+                "type": {
+                  "option": "u64"
+                }
+              },
+              {
+                "name": "last_valid_unix_timestamp_in_seconds",
+                "type": {
+                  "option": "u64"
+                }
               }
             ]
           }

@@ -22,10 +22,12 @@ use sokoban::{FromSlice, RedBlackTree};
 use std::fmt::Debug;
 
 #[repr(C)]
-#[derive(Eq, PartialEq, Debug, Default, Copy, Clone, Zeroable, Pod)]
+#[derive(
+    Eq, BorshDeserialize, BorshSerialize, PartialEq, Debug, Default, Copy, Clone, Zeroable, Pod,
+)]
 pub struct FIFOOrderId {
     /// The price of the order, in ticks. Each market has a designated
-    /// tick size (some number of quote lots) that is used to convert the price to quote ticks per base unit.
+    /// tick size (some number of quote lots per base unit) that is used to convert the price to ticks.
     /// For example, if the tick size is 0.01, then a price of 1.23 is converted to 123 ticks.
     /// If the quote lot size is 0.001, this means that there is a spacing of 10 quote lots
     /// in between each tick.
@@ -66,7 +68,7 @@ impl FIFOOrderId {
 
 impl PartialOrd for FIFOOrderId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // The order of the orders is determined by the price of the order. If the price is the same,
+        // The ordering of the `FIFOOrderId` struct is determined by the price of the order. If the price is the same,
         // then the order with the lower sequence number is considered to be the lower order.
         //
         // Asks are sorted in ascending order, and bids are sorted in descending order.
@@ -103,15 +105,57 @@ impl Ord for FIFOOrderId {
 pub struct FIFORestingOrder {
     pub trader_index: u64,
     pub num_base_lots: BaseLots, // Number of base lots quoted
-    _padding: [u64; 2],
+    pub last_valid_slot: u64,
+    pub last_valid_unix_timestamp_in_seconds: u64,
 }
 
 impl FIFORestingOrder {
-    pub fn new(trader_index: u64, num_base_lots: BaseLots) -> Self {
+    pub fn new_default(trader_index: u64, num_base_lots: BaseLots) -> Self {
         FIFORestingOrder {
             trader_index,
             num_base_lots,
-            _padding: [0; 2],
+            last_valid_slot: 0,
+            last_valid_unix_timestamp_in_seconds: 0,
+        }
+    }
+
+    pub fn new(
+        trader_index: u64,
+        num_base_lots: BaseLots,
+        last_valid_slot: Option<u64>,
+        last_valid_unix_timestamp_in_seconds: Option<u64>,
+    ) -> Self {
+        FIFORestingOrder {
+            trader_index,
+            num_base_lots,
+            last_valid_slot: last_valid_slot.unwrap_or(0),
+            last_valid_unix_timestamp_in_seconds: last_valid_unix_timestamp_in_seconds.unwrap_or(0),
+        }
+    }
+
+    pub fn new_with_last_valid_slot(
+        trader_index: u64,
+        num_base_lots: BaseLots,
+        last_valid_slot: u64,
+    ) -> Self {
+        FIFORestingOrder {
+            trader_index,
+            num_base_lots,
+            last_valid_slot,
+            last_valid_unix_timestamp_in_seconds: 0,
+        }
+    }
+
+    pub fn new_with_last_valid_unix_timestamp(
+        trader_index: u64,
+        num_base_lots: BaseLots,
+        last_valid_unix_timestamp_in_seconds: u64,
+    ) -> Self {
+        FIFORestingOrder {
+            trader_index,
+            num_base_lots,
+            last_valid_slot: 0,
+            last_valid_unix_timestamp_in_seconds,
         }
     }
 }
@@ -119,6 +163,28 @@ impl FIFORestingOrder {
 impl RestingOrder for FIFORestingOrder {
     fn size(&self) -> u64 {
         self.num_base_lots.as_u64()
+    }
+
+    fn last_valid_slot(&self) -> Option<u64> {
+        if self.last_valid_slot == 0 {
+            None
+        } else {
+            Some(self.last_valid_slot)
+        }
+    }
+
+    fn last_valid_unix_timestamp_in_seconds(&self) -> Option<u64> {
+        if self.last_valid_unix_timestamp_in_seconds == 0 {
+            None
+        } else {
+            Some(self.last_valid_unix_timestamp_in_seconds)
+        }
+    }
+
+    fn is_expired(&self, current_slot: u64, current_unix_timestamp_in_seconds: u64) -> bool {
+        (self.last_valid_slot != 0 && self.last_valid_slot < current_slot)
+            || (self.last_valid_unix_timestamp_in_seconds != 0
+                && self.last_valid_unix_timestamp_in_seconds < current_unix_timestamp_in_seconds)
     }
 }
 
@@ -151,7 +217,7 @@ pub struct FIFOMarket<
     /// The sequence number of the next event.
     order_sequence_number: u64,
 
-    /// There are no maker fees. Taker fees are charged on the amount of the trade in basis points.
+    /// There are no maker fees. Taker fees are charged on the quote lots transacted in the trade, in basis points.
     pub taker_fee_bps: u64,
 
     /// Amount of fees collected from the market in its lifetime, in quote lots.
@@ -373,8 +439,9 @@ impl<
         trader_id: &MarketTraderId,
         order_packet: OrderPacket,
         record_event_fn: &mut dyn FnMut(MarketEvent<MarketTraderId>),
+        get_clock_fn: &mut dyn FnMut() -> (u64, u64),
     ) -> Option<(Option<FIFOOrderId>, MatchingEngineResponse)> {
-        self.place_order_inner(trader_id, order_packet, record_event_fn)
+        self.place_order_inner(trader_id, order_packet, record_event_fn, get_clock_fn)
     }
 
     fn reduce_order(
@@ -391,6 +458,7 @@ impl<
             order_id,
             side,
             size,
+            false,
             claim_funds,
             record_event_fn,
         )
@@ -543,16 +611,41 @@ impl<
     }
 
     #[inline]
-    /// Size with fees adjusted
+    /// Quote lot budget with fees adjusted (buys)
     ///
-    /// The desired result is size_in_lots / (1 + fee_bps). We approach this result by taking
+    /// The desired result is adjusted_quote_lots / (1 + fee_bps). We approach this result by taking
     /// (size_in_lots * u64::MAX) / (u64::MAX * (1 + fee_bps)) for accurate numerical precision.
     /// This will never overflow at any point in the calculation because all intermediate values
     /// will be stored in a u128. There is only a single multiplication of u64's which will be
     /// strictly less than u128::MAX
-    fn size_post_fee_adjustment(&self, size_in_adjusted_quote_lots: AdjustedQuoteLots) -> u64 {
+    fn adjusted_quote_lot_budget_post_fee_adjustment_for_buys(
+        &self,
+        size_in_adjusted_quote_lots: AdjustedQuoteLots,
+    ) -> Option<AdjustedQuoteLots> {
         let fee_adjustment = self.compute_fee(AdjustedQuoteLots::MAX).as_u128() + u64::MAX as u128;
-        (size_in_adjusted_quote_lots.as_u128() * u64::MAX as u128 / fee_adjustment) as u64
+        // Return an option to catch truncation from downcasting to u64
+        u64::try_from(size_in_adjusted_quote_lots.as_u128() * u64::MAX as u128 / fee_adjustment)
+            .ok()
+            .map(AdjustedQuoteLots::new)
+    }
+
+    #[inline]
+    /// Quote lot budget with fees adjusted (sells)
+    ///
+    /// The desired result is adjusted_quote_lots / (1 - fee_bps). We approach this result by taking
+    /// (size_in_lots * u64::MAX) / (u64::MAX * (1 - fee_bps)) for accurate numerical precision.
+    /// This will never overflow at any point in the calculation because all intermediate values
+    /// will be stored in a u128. There is only a single multiplication of u64's which will be
+    /// strictly less than u128::MAX
+    fn adjusted_quote_lot_budget_post_fee_adjustment_for_sells(
+        &self,
+        size_in_adjusted_quote_lots: AdjustedQuoteLots,
+    ) -> Option<AdjustedQuoteLots> {
+        let fee_adjustment = u64::MAX as u128 - self.compute_fee(AdjustedQuoteLots::MAX).as_u128();
+        // Return an option to catch truncation from downcasting to u64
+        u64::try_from(size_in_adjusted_quote_lots.as_u128() * u64::MAX as u128 / fee_adjustment)
+            .ok()
+            .map(AdjustedQuoteLots::new)
     }
 
     #[inline]
@@ -579,24 +672,48 @@ impl<
     }
 
     /// This function determines whether a PostOnly order crosses the book.
-    /// If the order crosses the book, the function returns the price of the best order
+    /// If the order crosses the book, the function returns the price of the best unexpired order
     /// on the opposite side of the book in Ticks. Otherwise, it returns None.
-    fn check_for_cross(&mut self, side: Side, num_ticks: Ticks) -> Option<Ticks> {
-        let book = self.get_book_mut(side.opposite());
-        while let Some((o_id, order)) = book.get_min() {
-            let crosses = match side.opposite() {
-                Side::Bid => o_id.price_in_ticks >= num_ticks,
-                Side::Ask => o_id.price_in_ticks <= num_ticks,
-            };
-            if !crosses {
-                break;
-            } else if order.num_base_lots > BaseLots::ZERO {
-                return Some(o_id.price_in_ticks);
+    fn check_for_cross(
+        &mut self,
+        side: Side,
+        num_ticks: Ticks,
+        current_slot: u64,
+        current_unix_timestamp_in_seconds: u64,
+        record_event_fn: &mut dyn FnMut(MarketEvent<MarketTraderId>),
+    ) -> Option<Ticks> {
+        loop {
+            let book_entry = self.get_book_mut(side.opposite()).get_min();
+            if let Some((o_id, order)) = book_entry {
+                let crosses = match side.opposite() {
+                    Side::Bid => o_id.price_in_ticks >= num_ticks,
+                    Side::Ask => o_id.price_in_ticks <= num_ticks,
+                };
+                if !crosses {
+                    break;
+                } else if order.num_base_lots > BaseLots::ZERO {
+                    if order.is_expired(current_slot, current_unix_timestamp_in_seconds) {
+                        self.reduce_order_inner(
+                            order.trader_index as u32,
+                            &o_id,
+                            side.opposite(),
+                            None,
+                            true,
+                            false,
+                            record_event_fn,
+                        )?;
+                    } else {
+                        return Some(o_id.price_in_ticks);
+                    }
+                } else {
+                    // If the order is empty, we can remove it from the tree
+                    // This case should never occur in v1
+                    phoenix_log!("WARNING: Empty order found in check_for_cross");
+                    self.get_book_mut(side.opposite()).remove(&o_id);
+                }
             } else {
-                // If the order is empty, we can remove it from the tree
-                // This case should never occur in v1
-                phoenix_log!("WARNING: Empty order found in check_for_cross");
-                book.remove(&o_id);
+                // Book is empty
+                break;
             }
         }
         None
@@ -644,6 +761,7 @@ impl<
         trader_id: &MarketTraderId,
         mut order_packet: OrderPacket,
         record_event_fn: &mut dyn FnMut(MarketEvent<MarketTraderId>),
+        get_clock_fn: &mut dyn FnMut() -> (u64, u64),
     ) -> Option<(Option<FIFOOrderId>, MatchingEngineResponse)> {
         if self.order_sequence_number == 0 {
             phoenix_log!("Market is uninitialized");
@@ -675,6 +793,11 @@ impl<
             self.get_or_register_trader(trader_id)?
         };
 
+        if order_packet.num_base_lots() == 0 && order_packet.num_quote_lots() == 0 {
+            phoenix_log!("Either num_base_lots or num_quote_lots must be nonzero");
+            return None;
+        }
+
         // For IOC order types exactly one of num_quote_lots or num_base_lots needs to be specified.
         if let OrderPacket::ImmediateOrCancel {
             num_base_lots,
@@ -697,6 +820,14 @@ impl<
             }
         }
 
+        let (current_slot, current_unix_timestamp) = get_clock_fn();
+
+        if order_packet.is_expired(current_slot, current_unix_timestamp) {
+            phoenix_log!("Order parameters include a last_valid_slot or last_valid_unix_timestamp_in_seconds in the past, skipping matching and posting");
+            // Do not fail the transaction if the order is expired, but do not place or match the order
+            return Some((None, MatchingEngineResponse::default()));
+        }
+
         let (resting_order, mut matching_engine_response) = if let OrderPacket::PostOnly {
             price_in_ticks,
             reject_post_only,
@@ -704,7 +835,13 @@ impl<
         } = &mut order_packet
         {
             // Handle cases where PostOnly order would cross the book
-            if let Some(ticks) = self.check_for_cross(side, *price_in_ticks) {
+            if let Some(ticks) = self.check_for_cross(
+                side,
+                *price_in_ticks,
+                current_slot,
+                current_unix_timestamp,
+                record_event_fn,
+            ) {
                 if *reject_post_only {
                     phoenix_log!("PostOnly order crosses the book - order rejected");
                     return None;
@@ -726,23 +863,37 @@ impl<
             }
 
             (
-                FIFORestingOrder::new(trader_index as u64, order_packet.num_base_lots()),
+                FIFORestingOrder::new(
+                    trader_index as u64,
+                    order_packet.num_base_lots(),
+                    order_packet.get_last_valid_slot(),
+                    order_packet.get_last_valid_unix_timestamp_in_seconds(),
+                ),
                 MatchingEngineResponse::default(),
             )
         } else {
             let base_lot_budget = order_packet.base_lot_budget();
             // Multiply the quote lot budget by the number of base lots per unit to get the number of
             // adjusted quote lots (quote_lots * base_lots_per_base_unit)
-            let adjusted_quote_lot_budget = AdjustedQuoteLots::new(
-                order_packet
-                    .quote_lot_budget()
-                    .map(|quote_lot_budget| {
-                        self.size_post_fee_adjustment(
-                            quote_lot_budget * self.base_lots_per_base_unit,
-                        )
-                    })
-                    .unwrap_or(u64::MAX),
-            );
+            let quote_lot_budget = order_packet.quote_lot_budget();
+            let adjusted_quote_lot_budget = match side {
+                // For buys, the adjusted quote lot budget is decreased by the max fee.
+                // This is because the fee is added to the quote lots spent after the matching is complete.
+                Side::Bid => quote_lot_budget.and_then(|quote_lot_budget| {
+                    self.adjusted_quote_lot_budget_post_fee_adjustment_for_buys(
+                        quote_lot_budget * self.base_lots_per_base_unit,
+                    )
+                }),
+                // For sells, the adjusted quote lot budget is increased by the max fee.
+                // This is because the fee is subtracted from the quote lot received after the matching is complete.
+                Side::Ask => quote_lot_budget.and_then(|quote_lot_budget| {
+                    self.adjusted_quote_lot_budget_post_fee_adjustment_for_sells(
+                        quote_lot_budget * self.base_lots_per_base_unit,
+                    )
+                }),
+            }
+            .unwrap_or_else(|| AdjustedQuoteLots::new(u64::MAX));
+
             let mut inflight_order = InflightOrder::new(
                 side,
                 order_packet.self_trade_behavior(),
@@ -750,9 +901,17 @@ impl<
                 order_packet.match_limit(),
                 base_lot_budget,
                 adjusted_quote_lot_budget,
+                order_packet.get_last_valid_slot(),
+                order_packet.get_last_valid_unix_timestamp_in_seconds(),
             );
             let resting_order = self
-                .match_order(&mut inflight_order, trader_index, record_event_fn)
+                .match_order(
+                    &mut inflight_order,
+                    trader_index,
+                    record_event_fn,
+                    current_slot,
+                    current_unix_timestamp,
+                )
                 .map_or_else(
                     || {
                         phoenix_log!("Encountered error matching order");
@@ -777,7 +936,7 @@ impl<
                         - inflight_order.quote_lot_fees
                 }
             };
-            let mut matching_engine_response = match side {
+            let matching_engine_response = match side {
                 Side::Bid => MatchingEngineResponse::new_from_buy(
                     matched_quote_lots,
                     inflight_order.matched_base_lots,
@@ -787,44 +946,6 @@ impl<
                     matched_quote_lots,
                 ),
             };
-
-            // If the trader is a registered trader, check if they have free lots
-            if trader_index != u32::MAX {
-                let trader_state = self.get_trader_state_from_index_mut(trader_index);
-                match side {
-                    Side::Bid => {
-                        let quote_lots_free_to_use =
-                            trader_state.quote_lots_free.min(matched_quote_lots);
-                        trader_state.use_free_quote_lots(quote_lots_free_to_use);
-                        matching_engine_response.use_free_quote_lots(quote_lots_free_to_use);
-                    }
-                    Side::Ask => {
-                        let base_lots_free_to_use = trader_state
-                            .base_lots_free
-                            .min(inflight_order.matched_base_lots);
-                        trader_state.use_free_base_lots(base_lots_free_to_use);
-                        matching_engine_response.use_free_base_lots(base_lots_free_to_use);
-                    }
-                }
-
-                // If the order crosses and only uses deposited funds, then add the matched funds back to the trader's free funds
-                // Set the matching_engine_response lots_out to zero to set token withdrawals to zero
-                if order_packet.no_deposit_or_withdrawal() {
-                    match side {
-                        Side::Bid => {
-                            trader_state
-                                .deposit_free_base_lots(matching_engine_response.num_base_lots_out);
-                            matching_engine_response.num_base_lots_out = BaseLots::ZERO;
-                        }
-                        Side::Ask => {
-                            trader_state.deposit_free_quote_lots(
-                                matching_engine_response.num_quote_lots_out,
-                            );
-                            matching_engine_response.num_quote_lots_out = QuoteLots::ZERO;
-                        }
-                    }
-                }
-            }
 
             record_event_fn(MarketEvent::FillSummary {
                 client_order_id: order_packet.client_order_id(),
@@ -862,15 +983,6 @@ impl<
                 );
                 return None;
             }
-
-            // Check the trader had enough deposited funds to process the order
-            if order_packet.no_deposit_or_withdrawal()
-                && trader_index != u32::MAX
-                && !matching_engine_response.verify_no_deposit_or_withdrawal()
-            {
-                phoenix_log!("Insufficient deposited funds to process order");
-                return None;
-            }
         } else {
             let price_in_ticks = order_packet.get_price_in_ticks();
             let (order_id, book_full) = match side {
@@ -884,8 +996,31 @@ impl<
                 ),
             };
 
-            // Only place an order if there is more size to place
-            if resting_order.num_base_lots > BaseLots::ZERO {
+            let limit_order_crosses = if matches!(order_packet, OrderPacket::PostOnly { .. }) {
+                // This check has already been performed for PostOnly orders
+                false
+            } else {
+                // Finds the most competitive valid resting order on the opposite book
+                let best_price_on_opposite_book = self
+                    .get_book(side.opposite())
+                    .iter()
+                    .find(|(_, resting_order)| {
+                        !resting_order.is_expired(current_slot, current_unix_timestamp)
+                            && resting_order.num_base_lots > BaseLots::ZERO
+                    })
+                    .map(|(o_id, _)| o_id.price_in_ticks)
+                    .unwrap_or_else(|| match side {
+                        Side::Bid => Ticks::MAX,
+                        Side::Ask => Ticks::ZERO,
+                    });
+                match side {
+                    Side::Bid => order_packet.get_price_in_ticks() >= best_price_on_opposite_book,
+                    Side::Ask => order_packet.get_price_in_ticks() <= best_price_on_opposite_book,
+                }
+            };
+
+            // Only place an order if there is more size to place and the limit order doesn't cross the book
+            if resting_order.num_base_lots > BaseLots::ZERO && !limit_order_crosses {
                 // Evict order from the book if it is at capacity
                 placed_order_id = Some(order_id);
                 if book_full {
@@ -907,7 +1042,7 @@ impl<
                     self.tick_size_in_quote_lots_per_base_unit;
                 let base_lots_per_base_unit = self.base_lots_per_base_unit;
                 let trader_state = self.get_trader_state_from_index_mut(trader_index);
-                // Update trader stata and matching engine response accordingly
+                // Update trader state and matching engine response accordingly
                 match side {
                     Side::Bid => {
                         let quote_lots_to_lock = (tick_size_in_quote_lots_per_base_unit
@@ -931,15 +1066,6 @@ impl<
                     }
                 }
 
-                // Check the trader had enough deposited funds to process the order
-                if order_packet.no_deposit_or_withdrawal()
-                    && trader_index != u32::MAX
-                    && !matching_engine_response.verify_no_deposit_or_withdrawal()
-                {
-                    phoenix_log!("Insufficient deposited funds to process order");
-                    return None;
-                }
-
                 // Record the place event
                 record_event_fn(MarketEvent::<MarketTraderId>::Place {
                     order_sequence_number: order_id.order_sequence_number,
@@ -948,10 +1074,73 @@ impl<
                     client_order_id: order_packet.client_order_id(),
                 });
 
+                if resting_order.last_valid_slot != 0
+                    || resting_order.last_valid_unix_timestamp_in_seconds != 0
+                {
+                    // Record the time in force event
+                    record_event_fn(MarketEvent::<MarketTraderId>::TimeInForce {
+                        order_sequence_number: order_id.order_sequence_number,
+                        last_valid_slot: resting_order.last_valid_slot,
+                        last_valid_unix_timestamp_in_seconds: resting_order
+                            .last_valid_unix_timestamp_in_seconds,
+                    });
+                }
+
                 // Increment the order sequence number after successfully placing an order
                 self.order_sequence_number += 1;
             }
         }
+
+        // If the trader is a registered trader, check if they have free lots
+        if trader_index != u32::MAX {
+            let trader_state = self.get_trader_state_from_index_mut(trader_index);
+            match side {
+                Side::Bid => {
+                    let quote_lots_free_to_use = trader_state
+                        .quote_lots_free
+                        .min(matching_engine_response.num_quote_lots());
+                    trader_state.use_free_quote_lots(quote_lots_free_to_use);
+                    matching_engine_response.use_free_quote_lots(quote_lots_free_to_use);
+                }
+                Side::Ask => {
+                    let base_lots_free_to_use = trader_state
+                        .base_lots_free
+                        .min(matching_engine_response.num_base_lots());
+                    trader_state.use_free_base_lots(base_lots_free_to_use);
+                    matching_engine_response.use_free_base_lots(base_lots_free_to_use);
+                }
+            }
+
+            // If the order crosses and only uses deposited funds, then add the matched funds back to the trader's free funds
+            // Set the matching_engine_response lots_out to zero to set token withdrawals to zero
+            if order_packet.no_deposit_or_withdrawal() {
+                match side {
+                    Side::Bid => {
+                        trader_state
+                            .deposit_free_base_lots(matching_engine_response.num_base_lots_out);
+                        matching_engine_response.num_base_lots_out = BaseLots::ZERO;
+                    }
+                    Side::Ask => {
+                        trader_state
+                            .deposit_free_quote_lots(matching_engine_response.num_quote_lots_out);
+                        matching_engine_response.num_quote_lots_out = QuoteLots::ZERO;
+                    }
+                }
+
+                // Check if trader has enough deposited funds to process the order
+                if !matching_engine_response.verify_no_deposit() {
+                    phoenix_log!("Trader does not have enough deposited funds to process order");
+                    return None;
+                }
+
+                // Check that the matching engine response does not withdraw any base or quote lots
+                if !matching_engine_response.verify_no_withdrawal() {
+                    phoenix_log!("Matching engine response withdraws base or quote lots");
+                    return None;
+                }
+            }
+        }
+
         Some((placed_order_id, matching_engine_response))
     }
 
@@ -1003,20 +1192,29 @@ impl<
         inflight_order: &mut InflightOrder,
         current_trader_index: u32,
         record_event_fn: &mut dyn FnMut(MarketEvent<MarketTraderId>),
+        current_slot: u64,
+        current_unix_timestamp: u64,
     ) -> Option<FIFORestingOrder> {
         let mut total_matched_adjusted_quote_lots = AdjustedQuoteLots::ZERO;
         while inflight_order.in_progress() {
             // Find the first order on the opposite side of the book that matches the inflight order.
-            let (trader_index, order_id, num_base_lots_quoted) = {
+            let (
+                trader_index,
+                order_id,
+                num_base_lots_quoted,
+                last_valid_slot,
+                last_valid_unix_timestamp_in_seconds,
+            ) = {
                 let book = self.get_book_mut(inflight_order.side.opposite());
-                // This looks at the top of the book to compare the book's price to the order's price
+                // Look at the top of the book to compare the book's price to the order's price
                 let (
                     crossed,
                     order_id,
                     FIFORestingOrder {
                         trader_index,
                         num_base_lots: num_base_lots_quoted,
-                        ..
+                        last_valid_slot,
+                        last_valid_unix_timestamp_in_seconds,
                     },
                 ) = if let Some((o_id, quote)) = book.get_min() {
                     (
@@ -1031,27 +1229,53 @@ impl<
                     phoenix_log!("Book is empty");
                     break;
                 };
-                // When the order no longer crosses the limit price (based on limit_price_in_ticks), stop matching
+                // If the order no longer crosses the limit price (based on limit_price_in_ticks), stop matching
                 if !crossed {
                     break;
                 }
                 if num_base_lots_quoted == BaseLots::ZERO {
                     // This block is entered if we encounter tombstoned orders during the matching process
+                    // (Should never trigger in v1)
                     book.remove(&order_id)?;
                     // The tombstone should count as part of the match limit
                     inflight_order.match_limit -= 1;
                     continue;
                 }
-                (trader_index, order_id, num_base_lots_quoted)
+                (
+                    trader_index,
+                    order_id,
+                    num_base_lots_quoted,
+                    last_valid_slot,
+                    last_valid_unix_timestamp_in_seconds,
+                )
             };
+
+            // This block is entered if the order has expired. The order is removed from the book and
+            // the match limit is decremented.
+            if (last_valid_slot != 0 && last_valid_slot < current_slot)
+                || (last_valid_unix_timestamp_in_seconds != 0
+                    && last_valid_unix_timestamp_in_seconds < current_unix_timestamp)
+            {
+                self.reduce_order_inner(
+                    trader_index as u32,
+                    &order_id,
+                    inflight_order.side.opposite(),
+                    None,
+                    true,
+                    false,
+                    record_event_fn,
+                )?;
+                inflight_order.match_limit -= 1;
+                continue;
+            }
 
             // Handle self trade
             if trader_index == current_trader_index as u64 {
                 match inflight_order.self_trade_behavior {
                     SelfTradeBehavior::Abort => return None,
-                    SelfTradeBehavior::CancelProvide | SelfTradeBehavior::DecrementTake => {
+                    SelfTradeBehavior::CancelProvide => {
                         // This block is entered if the self trade behavior for the crossing order is
-                        // CancelProvide or DecrementTake
+                        // CancelProvide
                         //
                         // We cancel the order from the book and free up the locked quote_lots or base_lots, but
                         // we do not claim them as part of the match
@@ -1061,23 +1285,49 @@ impl<
                             inflight_order.side.opposite(),
                             None,
                             false,
+                            false,
                             record_event_fn,
                         )?;
-                        if inflight_order.self_trade_behavior == SelfTradeBehavior::DecrementTake {
-                            // In the case that the self trade behavior is DecrementTake, we decrement the
-                            // the tick and lot budgets accordingly
-                            inflight_order.base_lot_budget = inflight_order
-                                .base_lot_budget
-                                .saturating_sub(num_base_lots_quoted);
-                            inflight_order.adjusted_quote_lot_budget =
-                                inflight_order.adjusted_quote_lot_budget.saturating_sub(
-                                    self.tick_size_in_quote_lots_per_base_unit
-                                        * order_id.price_in_ticks
-                                        * num_base_lots_quoted,
-                                );
-                        }
+                        inflight_order.match_limit -= 1;
+                    }
+                    SelfTradeBehavior::DecrementTake => {
+                        let base_lots_removed = inflight_order
+                            .base_lot_budget
+                            .min(
+                                inflight_order
+                                    .adjusted_quote_lot_budget
+                                    .unchecked_div::<QuoteLotsPerBaseUnit, BaseLots>(
+                                        order_id.price_in_ticks
+                                            * self.tick_size_in_quote_lots_per_base_unit,
+                                    ),
+                            )
+                            .min(num_base_lots_quoted);
+
+                        self.reduce_order_inner(
+                            current_trader_index,
+                            &order_id,
+                            inflight_order.side.opposite(),
+                            Some(base_lots_removed),
+                            false,
+                            false,
+                            record_event_fn,
+                        )?;
+                        // In the case that the self trade behavior is DecrementTake, we decrement the
+                        // the base lot and adjusted quote lot budgets accordingly
+                        inflight_order.base_lot_budget = inflight_order
+                            .base_lot_budget
+                            .saturating_sub(base_lots_removed);
+                        inflight_order.adjusted_quote_lot_budget =
+                            inflight_order.adjusted_quote_lot_budget.saturating_sub(
+                                self.tick_size_in_quote_lots_per_base_unit
+                                    * order_id.price_in_ticks
+                                    * base_lots_removed,
+                            );
                         // Self trades will count towards the match limit
                         inflight_order.match_limit -= 1;
+                        // If base_lots_removed < num_base_lots_quoted, then the order budget must be fully
+                        // exhausted
+                        inflight_order.should_terminate = base_lots_removed < num_base_lots_quoted;
                     }
                 }
                 continue;
@@ -1122,7 +1372,7 @@ impl<
                         * base_lots_to_remove;
                     let matched_order = book.get_mut(&order_id)?;
                     matched_order.num_base_lots -= base_lots_to_remove;
-                    // If these clause is reached, we make ensure that the loop terminates
+                    // If this clause is reached, we make ensure that the loop terminates
                     // as the order has been fully filled
                     inflight_order.should_terminate = true;
                     (
@@ -1139,14 +1389,21 @@ impl<
             // Increment the matched adjusted quote lots for fee calculation
             total_matched_adjusted_quote_lots += matched_adjusted_quote_lots;
 
-            // The fill event is recorded to be logged later
-            record_event_fn(MarketEvent::<MarketTraderId>::Fill {
-                maker_id: self.get_trader_id_from_index(trader_index as u32),
-                order_sequence_number: order_id.order_sequence_number,
-                price_in_ticks: order_id.price_in_ticks,
-                base_lots_filled: matched_base_lots,
-                base_lots_remaining: order_remaining_base_lots,
-            });
+            // If the matched base lots is zero, we don't record the fill event
+            if matched_base_lots != BaseLots::ZERO {
+                // The fill event is recorded
+                record_event_fn(MarketEvent::<MarketTraderId>::Fill {
+                    maker_id: self.get_trader_id_from_index(trader_index as u32),
+                    order_sequence_number: order_id.order_sequence_number,
+                    price_in_ticks: order_id.price_in_ticks,
+                    base_lots_filled: matched_base_lots,
+                    base_lots_remaining: order_remaining_base_lots,
+                });
+            } else if !inflight_order.should_terminate {
+                phoenix_log!(
+                    "WARNING: should_terminate should always be true if matched_base_lots is zero"
+                );
+            }
 
             let base_lots_per_base_unit = self.base_lots_per_base_unit;
             // Update the maker's state to reflect the match
@@ -1171,6 +1428,8 @@ impl<
         Some(FIFORestingOrder::new(
             current_trader_index as u64,
             inflight_order.base_lot_budget,
+            inflight_order.last_valid_slot,
+            inflight_order.last_valid_unix_timestamp_in_seconds,
         ))
     }
 
@@ -1255,6 +1514,7 @@ impl<
                     &order_id,
                     Side::from_order_sequence_number(order_id.order_sequence_number),
                     None,
+                    false,
                     claim_funds,
                     record_event_fn,
                 )
@@ -1282,6 +1542,7 @@ impl<
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn reduce_order_inner(
         &mut self,
@@ -1289,9 +1550,11 @@ impl<
         order_id: &FIFOOrderId,
         side: Side,
         size: Option<BaseLots>,
+        order_is_expired: bool,
         claim_funds: bool,
         record_event_fn: &mut dyn FnMut(MarketEvent<MarketTraderId>),
     ) -> Option<MatchingEngineResponse> {
+        let maker_id = self.get_trader_id_from_index(trader_index);
         let removed_base_lots = {
             let book = self.get_book_mut(side);
             let (should_remove_order_from_book, base_lots_to_remove) = {
@@ -1302,10 +1565,15 @@ impl<
                     if order.trader_index != trader_index as u64 {
                         return None;
                     }
-                    (
-                        base_lots_to_remove == order.num_base_lots,
-                        base_lots_to_remove,
-                    )
+                    // If the order is tagged as expired, we remove it from the book regardless of the size.
+                    if order_is_expired {
+                        (true, order.num_base_lots)
+                    } else {
+                        (
+                            base_lots_to_remove == order.num_base_lots,
+                            base_lots_to_remove,
+                        )
+                    }
                 } else {
                     return Some(MatchingEngineResponse::default());
                 }
@@ -1320,16 +1588,26 @@ impl<
                 resting_order.num_base_lots -= base_lots_to_remove;
                 resting_order.num_base_lots
             };
-            record_event_fn(MarketEvent::Reduce {
-                order_sequence_number: order_id.order_sequence_number,
-                price_in_ticks: order_id.price_in_ticks,
-                base_lots_removed: base_lots_to_remove,
-                base_lots_remaining,
-            });
+            // If the order was not cancelled by the maker, we make sure that the maker's id is logged.
+            if order_is_expired {
+                record_event_fn(MarketEvent::ExpiredOrder {
+                    maker_id,
+                    order_sequence_number: order_id.order_sequence_number,
+                    price_in_ticks: order_id.price_in_ticks,
+                    base_lots_removed: base_lots_to_remove,
+                });
+            } else {
+                record_event_fn(MarketEvent::Reduce {
+                    order_sequence_number: order_id.order_sequence_number,
+                    price_in_ticks: order_id.price_in_ticks,
+                    base_lots_removed: base_lots_to_remove,
+                    base_lots_remaining,
+                });
+            }
             base_lots_to_remove
         };
         let (num_quote_lots, num_base_lots) = {
-            // This constant needs to be copied because we mutably borrow below
+            // These constants need to be copied because we mutably borrow below
             let tick_size_in_quote_lots_per_base_unit = self.tick_size_in_quote_lots_per_base_unit;
             let base_lots_per_base_unit = self.base_lots_per_base_unit;
             let trader_state = self.get_trader_state_from_index_mut(trader_index);
