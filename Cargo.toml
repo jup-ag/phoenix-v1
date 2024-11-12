@@ -27,18 +27,16 @@ overflow-checks = true
 
 [dependencies]
 shank = "0.0.12"
-spl-token = { version = "3.5.0", features = ["no-entrypoint"] }
-spl-associated-token-account = { version = "2.1.0", features = [
-    "no-entrypoint",
-] }
-solana-program = "1.16.13"
-borsh = "0.9.3"
-bytemuck = "1.13.0"
+spl-token = { version = ">=5", features = ["no-entrypoint"] }
+spl-associated-token-account = { version = ">=5", features = ["no-entrypoint"] }
+solana-program = "2"
+borsh = "1"
+bytemuck = "1.19.0"
 lib-sokoban = "0.3.0"
 num_enum = "0.5.9"
 itertools = "0.10.5"
 thiserror = "^1.0.40"
-ellipsis-macros = "0.1.1"
+ellipsis-macros = { git = "https://github.com/jup-ag/ellipsis-macros.git", rev = "142c920ce91b0e41bb06c833dea46269cc868d14" }
 solana-security-txt = "1.1.0"
 static_assertions = "1.1.0"
 

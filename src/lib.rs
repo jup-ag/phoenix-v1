@@ -22,7 +22,7 @@ pub mod state;
 
 use crate::program::processor::*;
 
-use borsh::BorshSerialize;
+use borsh::{to_vec, BorshSerialize};
 // You need to import Pubkey prior to using the declare_id macro
 use ellipsis_macros::declare_id;
 use solana_program::{program::set_return_data, pubkey::Pubkey};
@@ -366,7 +366,7 @@ pub fn process_instruction(
     // We set the order ids at the end of the instruction because the return data gets cleared after
     // every CPI call.
     if !order_ids.is_empty() {
-        set_return_data(order_ids.try_to_vec()?.as_ref());
+        set_return_data(to_vec(&order_ids)?.as_ref());
     }
     Ok(())
 }
