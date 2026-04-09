@@ -24,8 +24,8 @@ use solana_program::{
     account_info::{next_account_info, AccountInfo},
     program_error::ProgramError,
     pubkey::Pubkey,
-    system_program,
 };
+use solana_sdk_ids::system_program;
 use static_assertions::const_assert_eq;
 
 pub fn get_vault_address(market: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {

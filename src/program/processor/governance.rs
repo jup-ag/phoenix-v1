@@ -15,8 +15,9 @@ use crate::{
 use borsh::BorshDeserialize;
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
-    pubkey::Pubkey, system_program,
+    pubkey::Pubkey,
 };
+use solana_sdk_ids::system_program;
 
 /// This action can be taken by the market authority to remove the seat (on the Market account) of a
 /// trader whose Seat account is no longer approved
@@ -163,7 +164,7 @@ pub(crate) fn process_change_market_status<'a, 'info>(
                 destination_starting_lamports + market_info.lamports();
             **market_info.lamports.borrow_mut() = 0;
             market_info.assign(&system_program::id());
-            market_info.realloc(0, false)?;
+            market_info.info.resize(0)?;
             phoenix_log!("Market has been removed");
         }
         // In all other cases, we simply update the status of the market

@@ -10,8 +10,9 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    system_instruction, system_program,
 };
+use solana_sdk_ids::system_program;
+use solana_system_interface::instruction as system_instruction;
 use spl_associated_token_account::get_associated_token_address;
 
 use crate::program::loaders::get_vault_address;

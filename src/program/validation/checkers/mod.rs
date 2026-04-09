@@ -1,7 +1,8 @@
 use crate::program::error::assert_with_msg;
 use solana_program::{
-    account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey, system_program,
+    account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey,
 };
+use solana_sdk_ids::system_program;
 use std::ops::Deref;
 
 pub mod phoenix_checkers;

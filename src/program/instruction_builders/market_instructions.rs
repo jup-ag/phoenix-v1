@@ -7,8 +7,8 @@ use borsh::{to_vec, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    system_program,
 };
+use solana_sdk_ids::system_program;
 use spl_associated_token_account::get_associated_token_address;
 
 use crate::program::loaders::get_vault_address;
